@@ -258,6 +258,12 @@ export default function OrdersPage() {
                     <p className="font-medium">{selectedOrder.customerName}</p>
                   </div>
                 )}
+                {selectedOrder.customerPhone && (
+                  <div>
+                    <p className="text-sm text-muted-foreground">No. HP</p>
+                    <p className="font-medium">{selectedOrder.customerPhone}</p>
+                  </div>
+                )}
                 <div>
                   <p className="mb-2 text-sm text-muted-foreground">Item</p>
                   <ScrollArea className="h-48">

@@ -251,7 +251,7 @@ class ThermalPrinter {
     await this.write(this.textToBytes('SANCTORY STORE'))
     await this.write(COMMANDS.FEED_LINE)
     await this.write(COMMANDS.NORMAL_SIZE)
-    await this.write(this.textToBytes('Komik & Merchandise Santo'))
+    await this.write(this.textToBytes('Little Light, Big Faith'))
     await this.write(COMMANDS.FEED_LINE)
     await this.write(this.textToBytes('================================'))
     await this.write(COMMANDS.FEED_LINE)
@@ -308,9 +308,13 @@ class ThermalPrinter {
     await this.write(this.textToBytes('================================'))
     await this.write(COMMANDS.FEED_LINE)
     await this.write(COMMANDS.ALIGN_CENTER)
-    await this.write(this.textToBytes('Terima kasih!'))
+    await this.write(this.textToBytes('Deo Gratia, Tuhan Memberkati'))
     await this.write(COMMANDS.FEED_LINE)
-    await this.write(this.textToBytes('Semoga diberkati'))
+    await this.write(this.textToBytes('Instagram: @sanctory.id'))
+    await this.write(COMMANDS.FEED_LINE)
+    await this.write(this.textToBytes('Website: www.sanctory.id'))
+    await this.write(COMMANDS.FEED_LINE)
+    await this.write(this.textToBytes('Phone: +62 857-7909-9960'))
     await this.write(COMMANDS.FEED_LINE)
     await this.write(COMMANDS.FEED_LINE)
     await this.write(COMMANDS.FEED_LINE)
@@ -337,8 +341,8 @@ export function generateReceiptText(order: Order): string {
 
   let receipt = ''
   receipt += '================================\n'
-  receipt += '       SANCTORY STORE\n'
-  receipt += 'Komik & Merchandise Sant & santa\n'
+  receipt += '         SANCTORY STORE\n'
+  receipt += '     Little Light, Big Faith\n'
   receipt += '================================\n'
   receipt += `No: ${order.id.toUpperCase()}\n`
   receipt += `Tanggal: ${dateStr} ${timeStr}\n`
@@ -365,9 +369,13 @@ export function generateReceiptText(order: Order): string {
   }
 
   receipt += '================================\n'
-  receipt += '       Terima kasih!\n'
-  receipt += '      Tuhan memberkati\n'
+  receipt += '  Deo Gratia, Tuhan Memberkati\n'
+  receipt += '    Instagram: @sanctory.id\n'
+  receipt += '    Website: www.sanctory.id\n'
+  receipt += '    Phone: +62 857-7909-9960 \n'
   receipt += '================================\n'
+  receipt += '                                \n'
+  receipt += '                                \n'
 
   return receipt
 }
