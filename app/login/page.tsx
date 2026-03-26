@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
+import Image from "next/image"
 import { useRouter } from "next/navigation"
 import { useStore } from "@/lib/store"
 import { Button } from "@/components/ui/button"
@@ -48,10 +49,18 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <div className="w-full max-w-sm">
         <div className="flex flex-col items-center mb-8">
-          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary text-primary-foreground font-bold text-2xl mb-4">
+          {/* <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary text-primary-foreground font-bold text-2xl mb-4">
             SS
           </div>
-          <h1 className="text-2xl font-bold">Sanctory Store</h1>
+          <h1 className="text-2xl font-bold">Sanctory Store</h1> */}
+          <Image
+          src="/logo-color.png"
+          alt="Logo"
+          loading="lazy"
+          width={40}
+          height={40}
+          className="h-[40px] w-auto object-contain"
+          />
           <p className="text-muted-foreground text-sm">Mini POS System</p>
         </div>
 

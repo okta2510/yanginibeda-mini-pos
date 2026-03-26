@@ -29,6 +29,7 @@ export interface Order {
   createdAt: string
   paidAt?: string
   customerName?: string
+  customerPhone?: string
   notes?: string
 }
 
@@ -53,7 +54,7 @@ interface StoreState {
 
   // Orders History
   orders: Order[]
-  createOrder: (paymentMethod: PaymentMethod, customerName?: string, notes?: string) => Order | null
+  createOrder: (paymentMethod: PaymentMethod, customerName?: string, customerPhone?: string, notes?: string) => Order | null
   updateOrderStatus: (orderId: string, status: Order['status']) => void
   deleteOrder: (orderId: string) => void
 
@@ -64,6 +65,12 @@ interface StoreState {
 const generateId = () => Math.random().toString(36).substring(2, 15)
 
 // Initial dummy items
+/**
+ * Initial seed data for the product catalog.
+ *
+ * This constant is set immediately when the module is loaded/evaluated
+ * (i.e., at application startup when `store.ts` is first imported).
+ */
 const initialItems: Item[] = [
   {
     id: '1',
@@ -277,7 +284,7 @@ export const useStore = create<StoreState>()(
 
       orders: [],
 
-      createOrder: (paymentMethod, customerName, notes) => {
+      createOrder: (paymentMethod, customerName, customerPhone, notes) => {
         const state = get()
         if (state.currentOrder.length === 0) return null
 
@@ -295,6 +302,7 @@ export const useStore = create<StoreState>()(
           createdAt: new Date().toISOString(),
           paidAt: new Date().toISOString(),
           customerName,
+          customerPhone,
           notes,
         }
 

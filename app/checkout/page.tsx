@@ -1,9 +1,10 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import Link from "next/link"
 import Image from "next/image"
 import { Header } from "@/components/header"
+import { AuthGuard } from "@/components/auth-guard"
 import { useStore, type PaymentMethod } from "@/lib/store"
 import { formatCurrency } from "@/lib/currency"
 import { printer, generateReceiptText } from "@/lib/printer"
@@ -13,6 +14,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
+import { Switch } from "@/components/ui/switch"
 import { Separator } from "@/components/ui/separator"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import {
@@ -47,6 +49,11 @@ const paymentMethods: { value: PaymentMethod; label: string; icon: typeof Bankno
   { value: "Other", label: "Lainnya", icon: HelpCircle, description: "Metode lain" },
 ]
 
+const PRINTER_AUTO_CONNECT_KEY = "printer:autoConnect"
+const PRINTER_DEVICE_ID_KEY = "printer:deviceId"
+const PRINTER_DEVICE_NAME_KEY = "printer:deviceName"
+const DEFAULT_PRINTER_DEVICE_ID = "Irn8cMlUCswQ367SrRwyBA=="
+
 export default function CheckoutPage() {
   const {
     currentOrder,
@@ -58,25 +65,68 @@ export default function CheckoutPage() {
 
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("Cash")
   const [customerName, setCustomerName] = useState("")
+  const [customerPhone, setCustomerPhone] = useState("")
   const [notes, setNotes] = useState("")
   const [isPrinterConnected, setIsPrinterConnected] = useState(false)
+  const [otherPaymentLabel, setOtherPaymentLabel] = useState("")
+  const [autoConnectEnabled, setAutoConnectEnabled] = useState(false)
+  const [lastPrinterName, setLastPrinterName] = useState<string | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
   const [successDialogOpen, setSuccessDialogOpen] = useState(false)
   const [lastOrder, setLastOrder] = useState<ReturnType<typeof createOrder>>(null)
+  const hasAutoConnectRun = useRef(false)
 
   const subtotal = currentOrder.reduce(
     (sum, item) => sum + item.item.price * item.quantity,
     0
   )
 
-  const handleConnectPrinter = async () => {
-    const connected = await printer.connect()
+  const connectPrinter = async (isAutoConnect = false) => {
+    const savedDeviceId = typeof window !== "undefined"
+      ? localStorage.getItem(PRINTER_DEVICE_ID_KEY) || undefined
+      : undefined
+
+    const savedDeviceName = typeof window !== "undefined"
+      ? localStorage.getItem(PRINTER_DEVICE_NAME_KEY) || undefined
+      : undefined
+
+    // For auto-connect, use saved device ID or fall back to default
+    const deviceIdToUse = isAutoConnect
+      ? (savedDeviceId || DEFAULT_PRINTER_DEVICE_ID)
+      : savedDeviceId
+
+    const connected = isAutoConnect
+      ? await printer.reconnect(deviceIdToUse, savedDeviceName)
+      : await printer.connect(savedDeviceId)
+
     setIsPrinterConnected(connected)
+
     if (connected) {
+      if (typeof window !== "undefined") {
+        localStorage.setItem(
+          PRINTER_AUTO_CONNECT_KEY,
+          (isAutoConnect || autoConnectEnabled) ? "true" : "false"
+        )
+        const deviceId = printer.getDeviceId()
+        const deviceName = printer.getDeviceName()
+        if (deviceId) {
+          localStorage.setItem(PRINTER_DEVICE_ID_KEY, deviceId)
+        }
+        localStorage.setItem(PRINTER_DEVICE_NAME_KEY, deviceName)
+        setLastPrinterName(deviceName)
+      }
       toast.success(`Terhubung ke ${printer.getDeviceName()}`)
     } else {
-      toast.error("Gagal menghubungkan printer")
+      if (!isAutoConnect && !printer.wasCancelled) {
+        toast.error("Gagal menghubungkan printer")
+      }
     }
+
+    return connected
+  }
+
+  const handleConnectPrinter = async () => {
+    await connectPrinter(false)
   }
 
   const handleDisconnectPrinter = () => {
@@ -84,6 +134,49 @@ export default function CheckoutPage() {
     setIsPrinterConnected(false)
     toast.info("Printer terputus")
   }
+
+  const handleAutoConnectChange = (checked: boolean) => {
+    setAutoConnectEnabled(checked)
+    localStorage.setItem(PRINTER_AUTO_CONNECT_KEY, checked ? "true" : "false")
+
+    if (!checked) {
+      localStorage.removeItem(PRINTER_DEVICE_ID_KEY)
+      return
+    }
+
+    if (isPrinterConnected) {
+      const deviceId = printer.getDeviceId()
+      if (deviceId) {
+        localStorage.setItem(PRINTER_DEVICE_ID_KEY, deviceId)
+      }
+    }
+  }
+
+  useEffect(() => {
+    if (hasAutoConnectRun.current) return
+    hasAutoConnectRun.current = true
+
+    const shouldAutoConnect = localStorage.getItem(PRINTER_AUTO_CONNECT_KEY) === "true"
+    const savedPrinterName = localStorage.getItem(PRINTER_DEVICE_NAME_KEY)
+    const savedDeviceId = localStorage.getItem(PRINTER_DEVICE_ID_KEY)
+    
+    // Enable auto-connect on first load if not yet configured
+    if (!localStorage.getItem(PRINTER_AUTO_CONNECT_KEY)) {
+      localStorage.setItem(PRINTER_AUTO_CONNECT_KEY, "true")
+    }
+    
+    setAutoConnectEnabled(shouldAutoConnect || !savedDeviceId)
+    setLastPrinterName(savedPrinterName)
+
+    // On page load, always use auto-reconnect (no user gesture needed)
+    // handleConnectPrinter cannot be called from useEffect as it requires user gesture for Bluetooth picker
+    void (async () => {
+      const connected = await connectPrinter(true)
+      if (!connected && (savedDeviceId || savedPrinterName)) {
+        toast.info("Auto connect belum berhasil. Coba tombol Hubungkan Printer.")
+      }
+    })()
+  }, [])
 
   const handleCheckout = async () => {
     if (currentOrder.length === 0) {
@@ -94,7 +187,16 @@ export default function CheckoutPage() {
     setIsProcessing(true)
 
     try {
-      const order = createOrder(paymentMethod, customerName || undefined, notes || undefined)
+      const combinedNotes = paymentMethod === "Other" && otherPaymentLabel
+        ? [otherPaymentLabel, notes].filter(Boolean).join(" - ")
+        : notes
+
+      const order = createOrder(
+        paymentMethod,
+        customerName || undefined,
+        customerPhone || undefined,
+        combinedNotes || undefined
+      )
       if (order) {
         setLastOrder(order)
 
@@ -109,7 +211,9 @@ export default function CheckoutPage() {
 
         setSuccessDialogOpen(true)
         setCustomerName("")
+        setCustomerPhone("")
         setNotes("")
+        setOtherPaymentLabel("")
       }
     } catch {
       toast.error("Gagal memproses pesanan")
@@ -118,38 +222,61 @@ export default function CheckoutPage() {
     }
   }
 
-  const handlePrintReceipt = () => {
+  const handlePrintReceipt = async () => {
     if (!lastOrder) return
 
-    if (isPrinterConnected) {
-      printer.printReceipt(lastOrder)
-      toast.success("Struk dicetak")
-    } else {
-      const receiptText = generateReceiptText(lastOrder)
-      const printWindow = window.open("", "_blank")
-      if (printWindow) {
-        printWindow.document.write(`
-          <html>
-            <head>
-              <title>Struk - ${lastOrder.id}</title>
-              <style>
-                body { font-family: monospace; white-space: pre; padding: 20px; }
-                @media print { body { padding: 0; } }
-              </style>
-            </head>
-            <body>${receiptText}</body>
-          </html>
-        `)
-        printWindow.document.close()
-        printWindow.print()
+    try {
+      let canUsePrinter = isPrinterConnected && printer.isConnected()
+
+      if (!canUsePrinter) {
+        const savedDeviceId = localStorage.getItem(PRINTER_DEVICE_ID_KEY) || DEFAULT_PRINTER_DEVICE_ID
+        const savedDeviceName = localStorage.getItem(PRINTER_DEVICE_NAME_KEY) || undefined
+        const reconnected = await printer.reconnect(savedDeviceId, savedDeviceName)
+        setIsPrinterConnected(reconnected)
+        canUsePrinter = reconnected
       }
+
+      if (canUsePrinter) {
+        await printer.printReceipt(lastOrder)
+        toast.success("Struk dicetak")
+        return
+      }
+    } catch {
+      setIsPrinterConnected(false)
+    }
+
+    const receiptText = generateReceiptText(lastOrder)
+    const printWindow = window.open("", "_blank")
+    if (printWindow) {
+      printWindow.document.write(`
+        <html>
+          <head>
+            <title>Struk - ${lastOrder.id}</title>
+            <style>
+              body { font-family: monospace; white-space: pre; padding: 20px; }
+              @media print { body { padding: 0; } }
+            </style>
+          </head>
+          <body>${receiptText}</body>
+        </html>
+      `)
+      printWindow.document.close()
+      printWindow.print()
+    }
+  }
+
+  const handleSuccessDialogChange = (open: boolean) => {
+    setSuccessDialogOpen(open)
+    if (!open) {
+      setLastOrder(null)
     }
   }
 
   return (
-    <div className="min-h-screen bg-background">
-      <Header />
-      <main className="container mx-auto px-4 py-6">
+    <AuthGuard>
+      <div className="min-h-screen bg-background">
+        <Header />
+        <main className="container mx-auto px-4 py-6">
         <div className="mb-6">
           <h1 className="text-2xl font-bold tracking-tight">Kasir</h1>
           <p className="text-muted-foreground">
@@ -311,6 +438,17 @@ export default function CheckoutPage() {
                       </div>
                     ))}
                   </RadioGroup>
+                    {paymentMethod === "Other" && (
+                      <div className="grid gap-2 pt-4">
+                        <Label htmlFor="otherPaymentLabel">Keterangan Metode Lainnya</Label>
+                        <Input
+                          id="otherPaymentLabel"
+                          value={otherPaymentLabel}
+                          onChange={(e) => setOtherPaymentLabel(e.target.value)}
+                          placeholder="Contoh: GoPay, OVO, Dana..."
+                        />
+                      </div>
+                    )}
                 </CardContent>
               </Card>
 
@@ -329,6 +467,17 @@ export default function CheckoutPage() {
                       placeholder="Masukkan nama pelanggan"
                     />
                   </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="customerPhone">No. HP</Label>
+                    <Input
+                      id="customerPhone"
+                      type="tel"
+                      value={customerPhone}
+                      onChange={(e) => setCustomerPhone(e.target.value)}
+                      placeholder="Masukkan nomor HP pelanggan"
+                    />
+                  </div>
+
                   <div className="grid gap-2">
                     <Label htmlFor="notes">Catatan</Label>
                     <Textarea
@@ -386,6 +535,7 @@ export default function CheckoutPage() {
                             <>
                               <method.icon className="h-3 w-3" />
                               {method.label}
+                              {method.value === "Other" && otherPaymentLabel && ` - ${otherPaymentLabel}`}
                             </>
                           )
                         }
@@ -417,6 +567,25 @@ export default function CheckoutPage() {
                       </>
                     )}
                   </Button>
+                  {/* {lastPrinterName && (
+                    <div className="w-full rounded-md border border-dashed px-3 py-2 text-center">
+                      <p className="text-xs text-muted-foreground">Printer Terakhir</p>
+                      <p className="text-sm font-medium truncate">{lastPrinterName}</p>
+                    </div>
+                  )} */}
+                  <div className="flex w-full items-center justify-between rounded-md border px-3 py-2">
+                    <div>
+                      <p className="text-sm font-medium">Auto Connect Printer</p>
+                      <p className="text-xs text-muted-foreground">
+                        Hubungkan otomatis saat membuka kasir
+                      </p>
+                    </div>
+                    <Switch
+                      checked={autoConnectEnabled}
+                      onCheckedChange={handleAutoConnectChange}
+                      aria-label="Auto connect printer"
+                    />
+                  </div>
                   <Button
                     className="w-full gap-2"
                     size="lg"
@@ -439,7 +608,7 @@ export default function CheckoutPage() {
         )}
 
         {/* Success Dialog */}
-        <Dialog open={successDialogOpen} onOpenChange={setSuccessDialogOpen}>
+        <Dialog open={successDialogOpen} onOpenChange={handleSuccessDialogChange}>
           <DialogContent className="max-w-sm text-center">
             <DialogHeader>
               <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
@@ -463,14 +632,14 @@ export default function CheckoutPage() {
                 <Button
                   variant="outline"
                   className="flex-1 gap-2"
-                  onClick={handlePrintReceipt}
+                  onClick={() => void handlePrintReceipt()}
                 >
                   <Printer className="h-4 w-4" />
                   Cetak Struk
                 </Button>
                 <Button
                   className="flex-1"
-                  onClick={() => setSuccessDialogOpen(false)}
+                  onClick={() => handleSuccessDialogChange(false)}
                 >
                   Selesai
                 </Button>
@@ -478,7 +647,8 @@ export default function CheckoutPage() {
             </div>
           </DialogContent>
         </Dialog>
-      </main>
-    </div>
+        </main>
+      </div>
+    </AuthGuard>
   )
 }

@@ -1,5 +1,6 @@
 "use client"
 
+import Image from "next/image"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { Button } from "@/components/ui/button"
@@ -50,6 +51,7 @@ export function Header() {
     (sum, orderItem) => sum + orderItem.item.price * orderItem.quantity,
     0
   )
+  
 
   return (
     <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -68,7 +70,7 @@ export function Header() {
               </SheetHeader>
               <nav className="mt-6 flex flex-col gap-2">
                 {navItems.map((item) => {
-                  const requiresAuth = item.href === "/items" || item.href === "/dashboard"
+                  const requiresAuth = item.href === "/items" || item.href === "/dashboard" || item.href === "/orders" || item.href === "/checkout"
                   if (requiresAuth && !isAuthenticated) return null
                   return (
                     <Link
@@ -124,18 +126,26 @@ export function Header() {
           </Sheet>
 
           <Link href="/" className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold text-sm">
-              SS
-            </div>
-            <span className="hidden font-semibold sm:inline-block">
+            {/* <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold text-sm">
+            ss
+            </div> */}
+              <Image
+              src="/logo-color.png"
+              alt="Logo"
+              width={40}
+              loading="lazy"
+              height={40}
+              className="h-[40px] w-auto object-contain"
+              />
+            {/* <span className="hidden font-semibold sm:inline-block">
               Sanctory Store
-            </span>
+            </span> */}
           </Link>
         </div>
 
         <nav className="hidden md:flex items-center gap-1">
           {navItems.map((item) => {
-            const requiresAuth = item.href === "/items" || item.href === "/dashboard"
+            const requiresAuth = item.href === "/items" || item.href === "/dashboard" || item.href === "/orders" || item.href === "/checkout"
             if (requiresAuth && !isAuthenticated) return null
             return (
               <Link key={item.href} href={item.href}>
@@ -179,6 +189,7 @@ export function Header() {
             <Moon className="absolute h-5 w-5 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
             <span className="sr-only">Toggle theme</span>
           </Button>
+          {isAuthenticated+''}
           {isAuthenticated ? (
             <Button
               variant="ghost"

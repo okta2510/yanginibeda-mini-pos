@@ -2,10 +2,28 @@ import type { Order } from './store'
 import { formatCurrency } from './currency'
 
 interface BluetoothDevice {
+  id?: string
   gatt?: {
     connect: () => Promise<BluetoothRemoteGATTServer>
   }
   name?: string
+  addEventListener: (event: string, handler: () => void) => void
+  removeEventListener: (event: string, handler: () => void) => void
+}
+
+interface WebBluetooth {
+  requestDevice: (options: {
+    filters?: { name?: string; namePrefix?: string; services?: string[] }[]
+    optionalServices?: string[]
+    acceptAllDevices?: boolean
+  }) => Promise<BluetoothDevice>
+  getDevices?: () => Promise<BluetoothDevice[]>
+}
+
+declare global {
+  interface Navigator {
+    bluetooth?: WebBluetooth
+  }
 }
 
 interface BluetoothRemoteGATTServer {
@@ -45,34 +63,137 @@ class ThermalPrinter {
   private device: BluetoothDevice | null = null
   private server: BluetoothRemoteGATTServer | null = null
   private characteristic: BluetoothRemoteGATTCharacteristic | null = null
+  private onDisconnected: (() => void) | null = null
+  private _wasCancelled = false
 
-  async connect(): Promise<boolean> {
+  get wasCancelled(): boolean {
+    return this._wasCancelled
+  }
+  
+
+  private async connectToDevice(device: BluetoothDevice): Promise<boolean> {
+    if (!device.gatt) {
+      throw new Error('GATT tidak tersedia')
+    }
+
+    // Remove previous disconnect listener if any
+    if (this.device && this.onDisconnected) {
+      this.device.removeEventListener('gattserverdisconnected', this.onDisconnected)
+    }
+
+    this.device = device
+    this.server = await device.gatt.connect()
+    const service = await this.server.getPrimaryService('000018f0-0000-1000-8000-00805f9b34fb')
+    this.characteristic = await service.getCharacteristic('00002af1-0000-1000-8000-00805f9b34fb')
+
+    // Listen for unexpected disconnects and attempt to reconnect
+    this.onDisconnected = () => {
+      this.server = null
+      this.characteristic = null
+      if (device.gatt) {
+        device.gatt.connect()
+          .then((server) => {
+            this.server = server
+            return server.getPrimaryService('000018f0-0000-1000-8000-00805f9b34fb')
+          })
+          .then((service) => service.getCharacteristic('00002af1-0000-1000-8000-00805f9b34fb'))
+          .then((char) => { this.characteristic = char })
+          .catch(() => { /* reconnect failed silently */ })
+      }
+    }
+    device.addEventListener('gattserverdisconnected', this.onDisconnected)
+
+    return true
+  }
+
+  // Step 1+2: First-time pairing — shows device picker (requires user gesture)
+  // Saves device.id in caller (checkout page) for future reconnects
+  async connect(preferredDeviceId?: string): Promise<boolean> {
+    this._wasCancelled = false
     try {
       if (!navigator.bluetooth) {
         throw new Error('Bluetooth tidak didukung di browser ini')
       }
 
-      this.device = await (navigator.bluetooth as { requestDevice: (options: { filters?: { services?: string[] }[], optionalServices?: string[], acceptAllDevices?: boolean }) => Promise<BluetoothDevice> }).requestDevice({
+      // Try Step 3 first: reconnect via previously granted permission (no picker)
+      if (preferredDeviceId) {
+        const reconnected = await this.reconnect(preferredDeviceId)
+        if (reconnected) {
+          return true
+        }
+      }
+
+      // Fall back to Step 1: show device picker (requires user gesture click)
+      const device = await navigator.bluetooth.requestDevice({
         acceptAllDevices: true,
         optionalServices: ['000018f0-0000-1000-8000-00805f9b34fb'],
       })
 
-      if (!this.device.gatt) {
-        throw new Error('GATT tidak tersedia')
-      }
-
-      this.server = await this.device.gatt.connect()
-      const service = await this.server.getPrimaryService('000018f0-0000-1000-8000-00805f9b34fb')
-      this.characteristic = await service.getCharacteristic('00002af1-0000-1000-8000-00805f9b34fb')
-
-      return true
+      return await this.connectToDevice(device)
     } catch (error) {
+      // User dismissed the Bluetooth picker — not a real error, ignore silently
+      if (error instanceof DOMException && error.name === 'NotFoundError') {
+        this._wasCancelled = true
+        return false
+      }
       console.error('Bluetooth connection error:', error)
       return false
     }
   }
 
+  // Step 3 of recommended Web Bluetooth workaround:
+  // Reconnect using previously granted permission — no picker shown.
+  // Works only after user already granted permission via requestDevice.
+  async reconnect(deviceId?: string, deviceName?: string): Promise<boolean> {
+    try {
+      console.debug('Attempting Bluetooth reconnect...', { deviceId, deviceName }, navigator.bluetooth) // Debug log to verify Bluetooth API availability and parameters
+      if (!navigator.bluetooth) {
+        return false
+      }
+
+      // Some browsers expose requestDevice but not getDevices.
+      // In that case we can only reuse the in-memory device reference for this tab session.
+      if (typeof navigator.bluetooth.getDevices !== 'function') {
+        if (this.device) {
+          const idMatches = !deviceId || this.device.id === deviceId
+          const nameMatches = !deviceName || this.device.name === deviceName
+          if (idMatches || nameMatches) {
+            return await this.connectToDevice(this.device)
+          }
+        }
+        return false
+      }
+
+      // getDevices() returns only devices the user has already granted permission for
+      const devices = await navigator.bluetooth.getDevices()
+      if (!devices.length) return false
+
+      let targetDevice: BluetoothDevice | undefined
+      // Step 3a: find by exact saved device ID (most reliable)
+      if (deviceId) {
+        targetDevice = devices.find((device) => device.id === deviceId)
+      }
+
+      // Step 3b: fall back to name match if ID not found
+      if (!targetDevice && deviceName) {
+        targetDevice = devices.find((device) => device.name === deviceName)
+      }
+
+      // Do NOT fall back to devices[0] — that could connect to the wrong printer
+      if (!targetDevice) return false
+
+      return await this.connectToDevice(targetDevice)
+    } catch (error) {
+      console.error('Bluetooth reconnect error:', error)
+      return false
+    }
+  }
+
   disconnect(): void {
+    if (this.device && this.onDisconnected) {
+      this.device.removeEventListener('gattserverdisconnected', this.onDisconnected)
+      this.onDisconnected = null
+    }
     if (this.server?.connected) {
       this.server.disconnect()
     }
@@ -87,6 +208,10 @@ class ThermalPrinter {
 
   getDeviceName(): string {
     return this.device?.name ?? 'Unknown Device'
+  }
+
+  getDeviceId(): string | null {
+    return this.device?.id ?? null
   }
 
   private async write(data: number[]): Promise<void> {
@@ -122,7 +247,7 @@ class ThermalPrinter {
 
     // Header
     await this.write(COMMANDS.ALIGN_CENTER)
-    await this.write(COMMANDS.DOUBLE_SIZE)
+    await this.write(COMMANDS.NORMAL_SIZE)
     await this.write(this.textToBytes('SANCTORY STORE'))
     await this.write(COMMANDS.FEED_LINE)
     await this.write(COMMANDS.NORMAL_SIZE)
@@ -139,6 +264,10 @@ class ThermalPrinter {
     await this.write(COMMANDS.FEED_LINE)
     if (order.customerName) {
       await this.write(this.textToBytes(`Pelanggan: ${order.customerName}`))
+      await this.write(COMMANDS.FEED_LINE)
+    }
+    if (order.customerPhone) {
+      await this.write(this.textToBytes(`No. HP: ${order.customerPhone}`))
       await this.write(COMMANDS.FEED_LINE)
     }
     await this.write(this.textToBytes('--------------------------------'))
@@ -209,12 +338,15 @@ export function generateReceiptText(order: Order): string {
   let receipt = ''
   receipt += '================================\n'
   receipt += '       SANCTORY STORE\n'
-  receipt += '    Komik & Merchandise Santo\n'
+  receipt += 'Komik & Merchandise Sant & santa\n'
   receipt += '================================\n'
   receipt += `No: ${order.id.toUpperCase()}\n`
   receipt += `Tanggal: ${dateStr} ${timeStr}\n`
   if (order.customerName) {
     receipt += `Pelanggan: ${order.customerName}\n`
+  }
+  if (order.customerPhone) {
+    receipt += `No. HP: ${order.customerPhone}\n`
   }
   receipt += '--------------------------------\n'
 
@@ -234,7 +366,7 @@ export function generateReceiptText(order: Order): string {
 
   receipt += '================================\n'
   receipt += '       Terima kasih!\n'
-  receipt += '      Semoga diberkati\n'
+  receipt += '      Tuhan memberkati\n'
   receipt += '================================\n'
 
   return receipt
